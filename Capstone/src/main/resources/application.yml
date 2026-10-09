@@ -5,6 +5,9 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ragdb}
     username: ${SPRING_DATASOURCE_USERNAME:raguser}
     password: ${SPRING_DATASOURCE_PASSWORD:ragpassword}
+  sql:
+    init:
+      mode: always
   ai:
     ollama:
       base-url: ${SPRING_AI_OLLAMA_BASE_URL:http://localhost:11434}
@@ -24,3 +27,9 @@ management:
 
 server:
   port: ${SERVER_PORT:8080}
+
+app:
+  conversation:
+    history-message-limit: ${CONVERSATION_HISTORY_MESSAGE_LIMIT:10}
+    retention-days: ${CONVERSATION_RETENTION_DAYS:30}
+    cleanup-delay: ${CONVERSATION_CLEANUP_DELAY:3600000}

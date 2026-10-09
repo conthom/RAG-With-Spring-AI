@@ -57,7 +57,14 @@ Check application health at `http://localhost:8080/actuator/health`.
 ## API
 
 - `POST /api/documents` accepts JSON with `source` and `content`. Text is split into chunks and stored with its source metadata.
-- `POST /api/chat` accepts JSON with `question`. The RAG advisor retrieves the five closest chunks and asks the model to answer only from that context.
+- `POST /api/conversations` creates a persistent conversation and returns a `conversationId`.
+- `POST /api/chat` accepts `question`, an optional `conversationId`, and optional document metadata filters. If no ID is supplied, a conversation is created. The response includes the ID for follow-up turns.
+- `GET /api/conversations/{conversationId}` returns the configured recent message window.
+- `DELETE /api/conversations/{conversationId}` deletes a conversation and its messages.
+
+Conversation messages are stored in PostgreSQL, separately from document chunks in PGVector. The model receives a bounded recent history for follow-up context, while retrieved source documents remain authoritative for factual answers. Configure the history window with `CONVERSATION_HISTORY_MESSAGE_LIMIT` (defaults to 10 messages), inactivity retention with `CONVERSATION_RETENTION_DAYS` (defaults to 30 days), and cleanup cadence with `CONVERSATION_CLEANUP_DELAY` (defaults to one hour).
+
+Conversation endpoints do not currently authenticate callers. The generated UUID is difficult to guess, but this is suitable only for local/single-user use; add authentication and owner scoping before exposing it to multiple users.
 
 ## Configuration
 
