@@ -61,10 +61,27 @@ Check application health at `http://localhost:8080/actuator/health`.
 - `POST /api/chat` accepts `question`, an optional `conversationId`, and optional document metadata filters. If no ID is supplied, a conversation is created. The response includes the ID for follow-up turns.
 - `GET /api/conversations/{conversationId}` returns the configured recent message window.
 - `DELETE /api/conversations/{conversationId}` deletes a conversation and its messages.
+- `GET /api/conversations/{conversationId}/memories` lists memory proposals and their review status.
+- `POST /api/conversations/{conversationId}/memories` creates a pending proposal with `content` and `sourceContent`. Proposals are not used in answers until explicitly approved.
+- `PUT /api/conversations/{conversationId}/memories/{memoryId}` edits a pending proposal. `POST .../{memoryId}/approve` or `POST .../{memoryId}/reject` records the user's decision.
+- `POST .../{memoryId}/revoke` removes an approved memory from later prompts. `DELETE .../{memoryId}` permanently deletes a memory record.
+
+To propose a memory, send the user-edited text and the message it came from. The proposal remains pending until approved:
+
+```json
+{
+	"content": "Prefers concise answers with a short summary first.",
+	"sourceContent": "Please keep answers concise and put the summary first."
+}
+```
+
+Use the returned `id` with the `approve` or `reject` action endpoint. Editing is allowed only while the proposal is pending. Approved memories are supplied only to later turns in that conversation and are not treated as factual source evidence.
 
 Conversation messages are stored in PostgreSQL, separately from document chunks in PGVector. The model receives a bounded recent history for follow-up context, while retrieved source documents remain authoritative for factual answers. Configure the history window with `CONVERSATION_HISTORY_MESSAGE_LIMIT` (defaults to 10 messages), inactivity retention with `CONVERSATION_RETENTION_DAYS` (defaults to 30 days), and cleanup cadence with `CONVERSATION_CLEANUP_DELAY` (defaults to one hour).
 
-Conversation endpoints do not currently authenticate callers. The generated UUID is difficult to guess, but this is suitable only for local/single-user use; add authentication and owner scoping before exposing it to multiple users.
+Conversation history is still persisted automatically. Long-term memory is separate: the user must manually propose a memory from an assistant reply, review its source passage, edit the pending text if needed, and explicitly approve it. Only `APPROVED` memories are included in later prompts for that conversation; rejected, pending, and revoked memories are excluded. Users can revoke or delete memories. The application does not automatically extract or promote chat messages. See [the conversation and memory implementation plan](CONVERSATION_MEMORY_IMPLEMENTATION_PLAN.md#human-in-the-loop-requirement).
+
+Conversation and memory endpoints do not currently authenticate callers. Memories are scoped to a conversation, not an authenticated person. The generated UUID is difficult to guess, but this is suitable only for local/single-user use; add authentication and owner scoping before exposing it to multiple users.
 
 ## Configuration
 

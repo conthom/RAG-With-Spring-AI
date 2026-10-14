@@ -1,10 +1,10 @@
 # Conversation & Memory Implementation Plan
 
-## Goal
+## Status
 
-Add multi-turn conversations to the RAG application while keeping conversation history private, bounded, persistent, and distinct from the indexed document knowledge used for retrieval.
+Conversation history is implemented: `/api/chat` accepts an optional `conversationId`, persists user and assistant turns in PostgreSQL, loads a configured recent-message window for follow-up questions, and returns the conversation ID. Conversation history is separate from document chunks in PGVector.
 
-This document is an implementation plan, not a claim that conversation memory is already implemented. The current `/api/chat` endpoint is stateless: it accepts a question and optional document metadata filters, and the service retrieves document context for that single request.
+Human-reviewed memory proposals are implemented in a first, conversation-scoped form. Users can propose a memory from an assistant reply, inspect its source passage, edit the pending proposal, and explicitly approve or reject it. Approved memories can be revoked or deleted. Only approved memories for the current conversation are supplied to later prompts. Automatic extraction and cross-conversation, person-scoped memory are not implemented.
 
 ## Scope and terminology
 
@@ -14,6 +14,18 @@ Use two separate forms of memory:
 - **Document knowledge (RAG corpus):** source documents and their chunks in the vector store. It supplies factual evidence and remains the authority for technical answers.
 
 Do not automatically promote chat messages into the vector store. Conversation history may contain incorrect assumptions, sensitive data, or transient requests. Durable user preferences or facts should be a separate, explicit feature with consent, ownership, review, and deletion controls.
+
+## Human-in-the-loop requirement
+
+Any feature that turns conversation content into durable, reusable memory must require an explicit human decision before the memory can affect later answers:
+
+1. Present each proposed memory to the user with enough context to understand where it came from.
+2. Let the user edit, approve, or reject the proposal. Do not store or use a proposal as durable memory before approval.
+3. Make approved memories visible and let the user revoke or delete them later.
+4. Keep approved memories scoped to their owner and separate from both raw conversation history and the source-document corpus.
+5. Do not interpret ordinary conversation persistence as consent to create durable memory.
+
+The current implementation lets a user manually propose a memory from an assistant reply; there is no automatic extraction. It implements the pending, approved, rejected, and revoked states and sends only approved memories from the active conversation to the model. It does not require a human to approve every generated answer or every document ingestion. If either workflow is intended, specify it separately.
 
 ## Functional requirements
 
@@ -151,7 +163,7 @@ Do not rely on advisor ordering by assumption. Verify the actual Spring AI advis
 - For long conversations, summarize older turns only as a later optimization. A generated summary is untrusted context, must be attributable to its source turns, and must not replace document retrieval.
 - Do not create a global memory shared across users.
 
-## Implementation phases
+## Original implementation phases
 
 ### Phase 1: Conversation contract
 - Add conversation request/response DTOs and a conversation creation endpoint.
@@ -211,6 +223,22 @@ Set explicit retention, support deletion, minimize logs, and define data handlin
 ### Spring AI APIs vary by release
 Verify implementation classes and advisor behavior against the pinned Spring AI dependencies before coding; isolate them behind service/repository interfaces.
 
-## Current implementation gap
+## Current implementation status
 
-The current chat flow in `RagController` accepts a question and optional document metadata filters. `RagService` performs vector retrieval and generates an answer, but does not accept a conversation ID, load or persist chat history, or enforce conversation ownership. The implementation work should begin with the API and persistence contract rather than adding an in-memory map, which would lose history on restart and would not be suitable for multiple application instances.
+Implemented in the application:
+
+- Conversation creation, optional conversation IDs on chat requests, and conversation IDs in chat responses.
+- Persistent user/assistant messages, bounded recent history, and history retrieval.
+- Conversation deletion and scheduled retention cleanup.
+- RAG prompts that use history for conversational context while keeping retrieved documents authoritative for factual claims.
+- Human-reviewed conversation memory proposals with edit-before-approval, approve/reject, revoke, and delete controls.
+- Only approved memory content is included in subsequent prompts for the same conversation; pending/rejected/revoked items are excluded.
+
+Still missing or limited:
+
+- No authentication or owner scoping. UUIDs are opaque identifiers, not authorization; the README limits this to local/single-user use.
+- Memory is conversation-scoped, not person-scoped, and is not shared across conversations.
+- No automated memory extraction, clear-history endpoint, or citation payload.
+- Existing conversation turns are saved automatically as short-term history, but are never silently promoted to approved memory.
+
+Before multi-user deployment, add authenticated owner scoping to conversation and memory endpoints. Do not treat an unguessable conversation ID as authorization.

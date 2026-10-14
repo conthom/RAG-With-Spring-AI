@@ -8,6 +8,17 @@ type Message = {
   content: string;
 };
 
+type MemoryStatus = "PENDING" | "APPROVED" | "REJECTED" | "REVOKED";
+
+type Memory = {
+  id: string;
+  content: string;
+  sourceContent: string;
+  status: MemoryStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
 const suggestions = [
   "How does RAG use a vector store?",
   "What makes an answer grounded?",
@@ -24,6 +35,13 @@ export default function Home() {
   const [content, setContent] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memoryEdits, setMemoryEdits] = useState<Record<string, string>>({});
+  const [memoryDraftSource, setMemoryDraftSource] = useState<string | null>(null);
+  const [memoryDraft, setMemoryDraft] = useState("");
+  const [isProposingMemory, setIsProposingMemory] = useState(false);
+  const [busyMemoryId, setBusyMemoryId] = useState<string | null>(null);
+  const [isMemoryPanelOpen, setIsMemoryPanelOpen] = useState(false);
   const transcriptEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -41,9 +59,21 @@ export default function Home() {
         }
         setConversationId(conversation.conversationId);
         setMessages(conversation.messages ?? []);
+        return fetch(`/api/conversations/${encodeURIComponent(conversation.conversationId)}/memories`)
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error("Memory review is unavailable. Restart the Spring API to load the new endpoints.");
+            }
+            return response.json();
+          })
+          .then((savedMemories: Memory[]) => {
+            if (!cancelled) setMemories(savedMemories);
+          });
       })
-      .catch(() => {
-        if (!cancelled) setError("Could not load the saved conversation.");
+      .catch((requestError: unknown) => {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : "Could not load the saved conversation.");
+        }
       });
 
     return () => {
@@ -78,6 +108,14 @@ export default function Home() {
       setConversationId(result.conversationId);
       window.localStorage.setItem("rag-conversation-id", result.conversationId);
       setMessages((current) => [...current, { role: "ASSISTANT", content: result.answer }]);
+      const memoryResponse = await fetch(
+        `/api/conversations/${encodeURIComponent(result.conversationId)}/memories`,
+      );
+      if (memoryResponse.ok) {
+        setMemories(await memoryResponse.json());
+      } else {
+        setError("Your answer was saved, but memory review is unavailable. Restart the Spring API to load the new endpoints.");
+      }
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -118,7 +156,75 @@ export default function Home() {
     setConversationId(null);
     setError("");
     setNotice("");
+    setMemories([]);
+    setMemoryEdits({});
+    setMemoryDraftSource(null);
     window.localStorage.removeItem("rag-conversation-id");
+  }
+
+  async function submitMemoryProposal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!conversationId || !memoryDraftSource || !memoryDraft.trim() || isProposingMemory) return;
+
+    setIsProposingMemory(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/memories`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: memoryDraft, sourceContent: memoryDraftSource }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message ?? "Could not submit memory for review.");
+      setMemories((current) => [result, ...current]);
+      setMemoryDraftSource(null);
+      setMemoryDraft("");
+      setNotice("Memory submitted as a draft. It will not be used until you approve it.");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not submit memory for review.");
+    } finally {
+      setIsProposingMemory(false);
+    }
+  }
+
+  async function updateMemory(memory: Memory, action: string, method = "POST") {
+    if (!conversationId || busyMemoryId) return;
+    setBusyMemoryId(memory.id);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/memories/${encodeURIComponent(memory.id)}${action ? `/${action}` : ""}`,
+        {
+          method,
+          ...(method === "PUT"
+            ? {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ content: memoryEdits[memory.id] ?? memory.content }),
+              }
+            : {}),
+        },
+      );
+      const result = method === "DELETE" ? null : await response.json();
+      if (!response.ok) throw new Error(result?.message ?? "Could not update memory.");
+
+      if (method === "DELETE") {
+        setMemories((current) => current.filter((item) => item.id !== memory.id));
+      } else {
+        setMemories((current) => current.map((item) => item.id === memory.id ? result : item));
+        setMemoryEdits((current) => {
+          const next = { ...current };
+          delete next[memory.id];
+          return next;
+        });
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not update memory.");
+    } finally {
+      setBusyMemoryId(null);
+    }
   }
 
   function handleQuestionKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -130,11 +236,13 @@ export default function Home() {
 
   return (
     <main className="workspace">
-      <aside className="sidebar">
+      {isMemoryPanelOpen && <button className="sidebar-backdrop" type="button" aria-label="Close memory panel" onClick={() => setIsMemoryPanelOpen(false)} />}
+      <aside className={`sidebar ${isMemoryPanelOpen ? "sidebar-open" : ""}`}>
         <Link className="brand" href="/" aria-label="Fieldnotes home">
           <span className="brand-mark">f.</span>
           <span className="brand-name">fieldnotes<span> / RAG</span></span>
         </Link>
+        <button className="mobile-sidebar-close" type="button" onClick={() => setIsMemoryPanelOpen(false)}>Close review panel</button>
 
         <button className="new-chat" onClick={startNewChat} type="button">
           <span aria-hidden="true">+</span> New conversation
@@ -182,6 +290,68 @@ export default function Home() {
           <p className="source-footnote">This indexes text you provide; it does not import documents from the web.</p>
         </section>
 
+        <section className="memory-panel" aria-label="Reviewed memories">
+          <div className="memory-panel-heading">
+            <div>
+              <p className="eyebrow">HUMAN REVIEW</p>
+              <h2>Conversation memory</h2>
+            </div>
+            <span className="memory-count" aria-label="Approved memories">{memories.filter((memory) => memory.status === "APPROVED").length}</span>
+          </div>
+          {!conversationId ? (
+            <p className="memory-empty">Start a conversation to propose a memory for review.</p>
+          ) : memories.length === 0 ? (
+            <p className="memory-empty">Nothing saved. Assistant replies are never added automatically.</p>
+          ) : (
+            <div className="memory-list">
+              {memories.map((memory) => {
+                const editedContent = memoryEdits[memory.id] ?? memory.content;
+                const isBusy = busyMemoryId === memory.id;
+                return (
+                  <article className="memory-item" key={memory.id}>
+                    <div className="memory-item-heading">
+                      <span className={`memory-status status-${memory.status.toLowerCase()}`}>{memory.status}</span>
+                    </div>
+                    {memory.status === "PENDING" ? (
+                      <textarea
+                        aria-label="Edit proposed memory"
+                        value={editedContent}
+                        onChange={(event) => setMemoryEdits((current) => ({ ...current, [memory.id]: event.target.value }))}
+                        rows={3}
+                      />
+                    ) : (
+                      <p className="memory-content">{memory.content}</p>
+                    )}
+                    <details className="memory-source">
+                      <summary>Review source passage</summary>
+                      <p>{memory.sourceContent}</p>
+                    </details>
+                    <div className="memory-actions">
+                      {memory.status === "PENDING" && (
+                        <>
+                          <button type="button" disabled={isBusy || !editedContent.trim()} onClick={() => void updateMemory(memory, "", "PUT")}>Save edit</button>
+                          <button
+                            className="approve-memory"
+                            type="button"
+                            disabled={isBusy || !editedContent.trim() || editedContent !== memory.content}
+                            onClick={() => void updateMemory(memory, "approve")}
+                          >Approve</button>
+                          <button type="button" disabled={isBusy} onClick={() => void updateMemory(memory, "reject")}>Reject</button>
+                        </>
+                      )}
+                      {memory.status === "APPROVED" && (
+                        <button type="button" disabled={isBusy} onClick={() => void updateMemory(memory, "revoke")}>Revoke</button>
+                      )}
+                      <button className="delete-memory" type="button" disabled={isBusy} onClick={() => void updateMemory(memory, "", "DELETE")}>Delete</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          <p className="memory-policy">Only explicitly approved memories are included in later answers for this conversation.</p>
+        </section>
+
         <div className="sidebar-bottom">
           <span className="api-indicator" />
           <span>Spring AI API</span>
@@ -193,6 +363,9 @@ export default function Home() {
         <header className="topbar">
           <div className="mobile-brand"><span className="brand-mark">f.</span> fieldnotes</div>
           <div className="model-label"><span className="model-dot" /> RAG assistant <span className="model-divider">/</span> Ollama</div>
+          <button className="mobile-memory-toggle" type="button" onClick={() => setIsMemoryPanelOpen(true)}>
+            Memories {memories.filter((memory) => memory.status === "PENDING").length > 0 && `· ${memories.filter((memory) => memory.status === "PENDING").length}`}
+          </button>
           <button className="mobile-new-chat" onClick={startNewChat} type="button">New chat</button>
         </header>
 
@@ -219,6 +392,18 @@ export default function Home() {
                     <div className="message-body">
                       <p className="message-label">{message.role === "USER" ? "YOU" : "FIELDNOTES"}</p>
                       <div className="message-content">{message.content}</div>
+                      {conversationId && (
+                        <button
+                          className="propose-memory"
+                          type="button"
+                          onClick={() => {
+                            setMemoryDraftSource(message.content);
+                            setMemoryDraft("");
+                          }}
+                        >
+                          Propose a memory from this message
+                        </button>
+                      )}
                     </div>
                     {message.role === "USER" && <div className="user-avatar" aria-hidden="true">Y</div>}
                   </article>
@@ -259,6 +444,41 @@ export default function Home() {
           <p className="disclaimer">Responses are generated from retrieved content and may need verification.</p>
         </div>
       </section>
+      {memoryDraftSource !== null && (
+        <div className="memory-dialog-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !isProposingMemory) setMemoryDraftSource(null);
+        }}>
+          <section className="memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-dialog-title">
+            <button className="close-dialog" type="button" aria-label="Close memory proposal" onClick={() => setMemoryDraftSource(null)}>×</button>
+            <p className="eyebrow">NOT SAVED UNTIL APPROVED</p>
+            <h2 id="memory-dialog-title">Propose a conversation memory</h2>
+            <p className="dialog-copy">Write the preference or fact you want remembered. This draft is not used in answers unless you approve it in the review panel.</p>
+            <details className="dialog-source">
+              <summary>Source passage</summary>
+              <p>{memoryDraftSource}</p>
+            </details>
+            <form onSubmit={submitMemoryProposal}>
+              <label htmlFor="memory-draft">Proposed memory</label>
+              <textarea
+                id="memory-draft"
+                autoFocus
+                required
+                maxLength={4000}
+                rows={4}
+                value={memoryDraft}
+                onChange={(event) => setMemoryDraft(event.target.value)}
+                placeholder="For example: Prefers concise answers with a short summary first."
+              />
+              <div className="dialog-actions">
+                <button type="button" onClick={() => setMemoryDraftSource(null)}>Cancel</button>
+                <button className="approve-memory" type="submit" disabled={isProposingMemory || !memoryDraft.trim()}>
+                  {isProposingMemory ? "Submitting..." : "Submit for review"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
