@@ -27,14 +27,22 @@ public class RagController {
     private final RagService ragService;
     private final ConversationService conversationService;
     private final ConversationMemoryService conversationMemoryService;
+    private final VectorStoreResetService vectorStoreResetService;
 
     public RagController(
             RagService ragService,
             ConversationService conversationService,
-            ConversationMemoryService conversationMemoryService) {
+            ConversationMemoryService conversationMemoryService,
+            VectorStoreResetService vectorStoreResetService) {
         this.ragService = ragService;
         this.conversationService = conversationService;
         this.conversationMemoryService = conversationMemoryService;
+        this.vectorStoreResetService = vectorStoreResetService;
+    }
+
+    @DeleteMapping("/vector-store")
+    VectorStoreResetResponse resetVectorStore() {
+        return new VectorStoreResetResponse(vectorStoreResetService.clear());
     }
 
     @PostMapping("/conversations")
@@ -165,6 +173,9 @@ public class RagController {
     }
 
     record IngestResponse(String source, int chunksStored) {
+    }
+
+    record VectorStoreResetResponse(int chunksDeleted) {
     }
 
     record ChatRequest(

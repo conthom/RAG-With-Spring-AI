@@ -54,9 +54,20 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/chat -ContentType 
 
 Check application health at `http://localhost:8080/actuator/health`.
 
+## Reset the vector store
+
+To permanently delete every document chunk stored in the PGVector `vector_store` table, send:
+
+```powershell
+Invoke-RestMethod -Method Delete -Uri http://localhost:8080/api/vector-store
+```
+
+The response reports the number of deleted chunks. This does not delete conversation history, memories, or source files. The endpoint has no authentication, like the other API endpoints, so keep the app restricted to trusted local use.
+
 ## API
 
 - `POST /api/documents` accepts JSON with `source` and `content`. Text is split into chunks and stored with its source metadata.
+- `DELETE /api/vector-store` deletes all stored vector document chunks and returns the number deleted.
 - `POST /api/conversations` creates a persistent conversation and returns a `conversationId`.
 - `POST /api/chat` accepts `question`, an optional `conversationId`, and optional document metadata filters. If no ID is supplied, a conversation is created. The response includes the ID for follow-up turns.
 - `GET /api/conversations/{conversationId}` returns the configured recent message window.
